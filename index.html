@@ -202,8 +202,10 @@
         // Función auxiliar para convertir números con formato español (separador de miles '.' y decimal ',')
         function parseSpanishNumber(numStr) {
             if (!numStr) return 0;
+            // Verificar si el string contiene un signo negativo.
             const isNegative = numStr.includes('-') || numStr.includes('−');
-            const cleanStr = numStr.replace(/\./g, '').replace(',', '.').replace(/[−-]/g, '');
+            // Limpiar el string de cualquier caracter no numérico y no el signo negativo.
+            const cleanStr = numStr.replace(/[^\d,\-−]/g, '').replace(',', '.').replace(/[−-]/, '');
             const value = parseFloat(cleanStr);
             return isNegative ? -value : value;
         }
@@ -263,33 +265,34 @@
             switch (bank) {
                 case 'fiserv':
                     // Mapping of concepts and their search patterns for precise extraction.
+                    // Nota: Se ajustaron las expresiones regulares para capturar el signo y el monto juntos para que parseSpanishNumber los procese correctamente.
                     const fiservConcepts = {
-                        "VENTAS C/DTO ANTIC POR FINANC ADQUIREN": /VENTAS C\/DTO ANTIC POR FINANC ADQUIREN\s*[\+]\s*\$\s*([\d\.\,]+)/g,
-                        "ARANCEL": /ARANCEL\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "IVA CRED.FISC.COMERCIO S/ARANC 21,00%": /IVA CRED\.FISC\.COMERCIO S\/ARANC 21,00%\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "DTO S/VENTAS FIN ADQ CONT": /DTO S\/VENTAS FIN ADQ CONT\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "ARANCEL CUOTAS": /ARANCEL CUOTAS\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "DTO S/VENTAS FIN ADQ CUOTA": /DTO S\/VENTAS FIN ADQ CUOTA\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "IVA ARANCEL CUOTAS 21,00%": /IVA ARANCEL CUOTAS 21,00%\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "IVA S/DTO FIN ADQ CONT 21,00%": /IVA S\/DTO FIN ADQ CONT 21,00%\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "IVA S/DTO FIN ADQ CUOTA 21,00%": /IVA S\/DTO FIN ADQ CUOTA 21,00%\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "PERCEPCION IVA R.G. 2408 1,50 %": /PERCEPCION IVA R\.G\. 2408\s+1,50\s*%\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "PERCEPCION IVA R.G. 2408 3,00 %": /PERCEPCION IVA R\.G\. 2408\s+3,00\s*%\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "IMPORTE NETO DE PAGOS": /IMPORTE NETO DE PAGOS\s*\$\s*([\d\.\,]+)/g,
-                        "VENTAS C/DESCUENTO CONTADO": /VENTAS C\/DESCUENTO CONTADO\s*[\+]\s*\$\s*([\d\.\,]+)/g,
-                        "VENTAS C/DTO PLAN CUOTAS": /VENTAS C\/DTO PLAN CUOTAS\s*[\+]\s*\$\s*([\d\.\,]+)/g,
-                        "SERVICIO OPER. INTERNAC.": /SERVICIO OPER\. INTERNAC\.\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "IVA RI SERV.OPER. INT.": /IVA RI SERV\.OPER\. INT\.\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "QR AJUSTES": /QR AJUSTES\s*[\+]\s*\$\s*([\d\.\,]+)/g,
-                        "QR PERCEPCION IVA 3337": /QR PERCEPCION IVA 3337\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "CARGO SISTEMA CUOTAS MENS": /CARGO SISTEMA CUOTAS MENS\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "IVA RI SIST CUOTAS": /IVA RI SIST CUOTAS\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "VENTAS C/DTO CUOTAS FINANC. OTORG.": /VENTAS C\/DTO CUOTAS FINANC\. OTORG\.\s*[\+]\s*\$\s*([\d\.\,]+)/g,
-                        "PROMO CUOTA AHORA/SIMPLE": /PROMO CUOTA AHORA\/SIMPLE\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "IVA PROMO CUOTA AHORA\/SIMPLE 10,50%": /IVA PROMO CUOTA AHORA\/SIMPLE 10,50%\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "DESCUENTO FINANC.OTORG. CUOTAS": /DESCUENTO FINANC\.OTORG\. CUOTAS\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "IVA CRED.FISC.COM.L.25063 S/DTO F.OTOR 10,50%": /IVA CRED\.FISC\.COM\.L\.25063 S\/DTO F\.OTOR 10,50%\s*[-−]\s*\$\s*([\d\.\,]+)/g,
-                        "CARGO TERMINAL FISERV": /CARGO TERMINAL FISERV\s*[-−]\s*\$\s*([\d\.\,]+)/g
+                        "VENTAS C/DTO ANTIC POR FINANC ADQUIREN": /VENTAS C\/DTO ANTIC POR FINANC ADQUIREN\s*([\+]\s*\$\s*[\d\.\,]+)/g,
+                        "ARANCEL": /ARANCEL\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "IVA CRED.FISC.COMERCIO S/ARANC 21,00%": /IVA CRED\.FISC\.COMERCIO S\/ARANC 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "DTO S/VENTAS FIN ADQ CONT": /DTO S\/VENTAS FIN ADQ CONT\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "ARANCEL CUOTAS": /ARANCEL CUOTAS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "DTO S/VENTAS FIN ADQ CUOTA": /DTO S\/VENTAS FIN ADQ CUOTA\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "IVA ARANCEL CUOTAS 21,00%": /IVA ARANCEL CUOTAS 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "IVA S/DTO FIN ADQ CONT 21,00%": /IVA S\/DTO FIN ADQ CONT 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "IVA S/DTO FIN ADQ CUOTA 21,00%": /IVA S\/DTO FIN ADQ CUOTA 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "PERCEPCION IVA R.G. 2408 1,50 %": /PERCEPCION IVA R\.G\. 2408\s+1,50\s*%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "PERCEPCION IVA R.G. 2408 3,00 %": /PERCEPCION IVA R\.G\. 2408\s+3,00\s*%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "IMPORTE NETO DE PAGOS": /IMPORTE NETO DE PAGOS\s*(\s*\$\s*[\d\.\,]+)/g,
+                        "VENTAS C/DESCUENTO CONTADO": /VENTAS C\/DESCUENTO CONTADO\s*([\+]\s*\$\s*[\d\.\,]+)/g,
+                        "VENTAS C/DTO PLAN CUOTAS": /VENTAS C\/DTO PLAN CUOTAS\s*([\+]\s*\$\s*[\d\.\,]+)/g,
+                        "SERVICIO OPER. INTERNAC.": /SERVICIO OPER\. INTERNAC\.\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "IVA RI SERV.OPER. INT.": /IVA RI SERV\.OPER\. INT\.\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "QR AJUSTES": /QR AJUSTES\s*([\+]\s*\$\s*[\d\.\,]+)/g,
+                        "QR PERCEPCION IVA 3337": /QR PERCEPCION IVA 3337\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "CARGO SISTEMA CUOTAS MENS": /CARGO SISTEMA CUOTAS MENS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "IVA RI SIST CUOTAS": /IVA RI SIST CUOTAS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "VENTAS C/DTO CUOTAS FINANC. OTORG.": /VENTAS C\/DTO CUOTAS FINANC\. OTORG\.\s*([\+]\s*\$\s*[\d\.\,]+)/g,
+                        "PROMO CUOTA AHORA/SIMPLE": /PROMO CUOTA AHORA\/SIMPLE\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "IVA PROMO CUOTA AHORA\/SIMPLE 10,50%": /IVA PROMO CUOTA AHORA\/SIMPLE 10,50%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "DESCUENTO FINANC.OTORG. CUOTAS": /DESCUENTO FINANC\.OTORG\. CUOTAS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "IVA CRED.FISC.COM.L.25063 S/DTO F.OTOR 10,50%": /IVA CRED\.FISC\.COM\.L\.25063 S\/DTO F\.OTOR 10,50%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                        "CARGO TERMINAL FISERV": /CARGO TERMINAL FISERV\s*([-−]\s*\$\s*[\d\.\,]+)/g
                     };
                     
                     for (const concept in fiservConcepts) {
@@ -297,6 +300,8 @@
                         const matches = [...data.matchAll(regex)];
                         let total = 0;
                         for (const match of matches) {
+                            // Ahora el grupo capturado (match[1]) incluye el signo y el símbolo de moneda,
+                            // por lo que parseSpanishNumber puede determinar correctamente si es un valor positivo o negativo.
                             total += parseSpanishNumber(match[1]);
                         }
                         if (total !== 0) {
@@ -317,10 +322,17 @@
                         "IVA S/COSTO FINANCIERO 10,50%": /IVA S\/COSTO FINANCIERO\s*10,50%\s*([\d\.\,]+[-−])/g,
                         "PERCEPCION DE IVA RG 333 1,50%": /PERCEPCION DE IVA RG 333\s*1,50%\s*[\d\.\,]+\s*([\d\.\,]+[-−])/g,
                         "PERCEPCION DE IVA RG 333 3,00%": /PERCEPCION DE IVA RG 333\s*3,00%\s*[\d\.\,]+\s*([\d\.\,]+[-−])/g,
-                        // Regex mejorado para capturar el valor correcto al final de la sección
-                        "TOTAL DEBITOS": /[−-]TOTAL DEBITOS[\s\S]*?([\d\.\,]+)−/g,
-                        // Regex para el IVA
-                        "IVA": /[−-]IVA[\s\S]*?([\d\.\,]+)−/g,
+                        // El siguiente regex es demasiado general y causa la captura de valores incorrectos.
+                        // "TOTAL DEBITOS": /TOTAL DEBITOS[\s\S]*?([\d\.\,]+[-−])/g,
+                        // "IVA": /IVA[\s\S]*?([\d\.\,]+[-−])/g,
+                        
+                        // Nueva expresión regular más precisa para "TOTAL DEBITOS" basada en el formato
+                        // "−TOTAL DEBITOS ... 20,00−"
+                        "TOTAL DEBITOS": /TOTAL DEBITOS[\s\S]*?([\d\.\,]+[-−])/g,
+                        // Nueva expresión regular más precisa para "IVA" basada en el formato
+                        // "−IVA 21,00% 0,00 4,20−"
+                        "IVA": /IVA\s*[\d\.\,]*\s*%\s*[\d\.\,]*\s*([\d\.\,]+[-−])/g,
+                        
                         "COMISION ADMINISTRACION P": /COMISION ADMINISTRACION P\s*[\w\d\.\/\:\- ]*\s*([\d\.\,]+[-−])/g,
                         "NETO A LIQUIDAR POR VENTAS": /NETO A LIQUIDAR POR VENTAS\s*([\d\.\,]+)/g
                     };
