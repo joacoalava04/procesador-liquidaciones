@@ -210,8 +210,12 @@
             return isNegative ? -value : value;
         }
         
-        // Función para formatear números al estilo español (1.234,56)
+        // Función para formatear números al estilo español (1.234,56).
+        // Se ha modificado para que muestre el signo negativo correctamente.
         function formatSpanishNumber(num) {
+            if (num < 0) {
+                return `−${Math.abs(num).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            }
             return num.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         }
 
@@ -322,17 +326,10 @@
                         "IVA S/COSTO FINANCIERO 10,50%": /IVA S\/COSTO FINANCIERO\s*10,50%\s*([\d\.\,]+[-−])/g,
                         "PERCEPCION DE IVA RG 333 1,50%": /PERCEPCION DE IVA RG 333\s*1,50%\s*[\d\.\,]+\s*([\d\.\,]+[-−])/g,
                         "PERCEPCION DE IVA RG 333 3,00%": /PERCEPCION DE IVA RG 333\s*3,00%\s*[\d\.\,]+\s*([\d\.\,]+[-−])/g,
-                        // El siguiente regex es demasiado general y causa la captura de valores incorrectos.
-                        // "TOTAL DEBITOS": /TOTAL DEBITOS[\s\S]*?([\d\.\,]+[-−])/g,
-                        // "IVA": /IVA[\s\S]*?([\d\.\,]+[-−])/g,
-                        
-                        // Nueva expresión regular más precisa para "TOTAL DEBITOS" basada en el formato
-                        // "−TOTAL DEBITOS ... 20,00−"
+                        // Nuevo regex más flexible para TOTAL DEBITOS
                         "TOTAL DEBITOS": /TOTAL DEBITOS[\s\S]*?([\d\.\,]+[-−])/g,
-                        // Nueva expresión regular más precisa para "IVA" basada en el formato
-                        // "−IVA 21,00% 0,00 4,20−"
+                        // Nuevo regex más flexible para IVA basado en la posición en el documento
                         "IVA": /IVA\s*[\d\.\,]*\s*%\s*[\d\.\,]*\s*([\d\.\,]+[-−])/g,
-                        
                         "COMISION ADMINISTRACION P": /COMISION ADMINISTRACION P\s*[\w\d\.\/\:\- ]*\s*([\d\.\,]+[-−])/g,
                         "NETO A LIQUIDAR POR VENTAS": /NETO A LIQUIDAR POR VENTAS\s*([\d\.\,]+)/g
                     };
