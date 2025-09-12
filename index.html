@@ -6,6 +6,7 @@
     <title>Procesador de Liquidaciones</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
         body {
@@ -40,8 +41,6 @@
                     <option value="fiserv">Fiserv (Visa)</option>
                     <option value="cabal">Cabal</option>
                     <option value="amex">Amex</option>
-                    <option value="bankA">Banco A (Ejemplo)</option>
-                    <option value="bankB">Banco B (Ejemplo)</option>
                 </select>
             </div>
             <div>
@@ -56,11 +55,19 @@
             <button id="processButton" class="w-full md:w-auto px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors mb-2 md:mb-0">
                 Procesar Liquidación
             </button>
-            <button id="inspectButton" class="w-full md:w-auto px-6 py-3 bg-yellow-500 text-white font-semibold rounded-lg shadow-md hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:ring-offset-2 transition-colors">
+            <button id="inspectButton" class="w-full md:w-auto px-6 py-3 bg-yellow-500 text-white font-semibold rounded-lg shadow-md hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:ring-offset-2 transition-colors mb-2 md:mb-0">
                 Inspeccionar Archivo
+            </button>
+            <button id="exportExcelButton" class="w-full md:w-auto px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition-colors hidden" disabled>
+                Exportar a Excel
             </button>
         </div>
         
+        <!-- Contenedor para la barra de progreso -->
+        <div id="progressContainer" class="hidden w-full bg-gray-200 rounded-full h-2.5 mb-4 dark:bg-gray-700">
+            <div id="progressBar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-300 ease-in-out" style="width: 0%"></div>
+        </div>
+
         <div id="loadingMessage" class="text-center text-gray-500 hidden mb-4">
             Procesando PDF, por favor espera...
         </div>
@@ -77,89 +84,169 @@
         // Configura el worker de PDF.js
         pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js`;
 
+        let allFileSummaries = []; // Variable para almacenar los resúmenes de cada archivo
+
+        // ===========================================
+        //  Configuración de Conceptos por Banco
+        // ===========================================
+        const bankConfig = {
+            fiserv: {
+                concepts: {
+                    "Entidad Pagadora": /(?:Entidad Pagadora\s*:\s*([^\n]+))|(?:Entidad Pagadora\s*\n\s*([^\n]+))/g,
+                    "CUIT Entidad Pagadora": /Neto de pagos:[\s\S]*?\n\s*[\d\s]*\n\s*(\d{2}-\d{8}-\d)/g,
+                    "Numero y Fecha Liquidacion": [
+                        {
+                            regex: /ACRED EN CBU NRO:\s*[\s\S]*?(\d+)\s*\n\s*(\d{2}\/\d{2}\/\d{4})/g,
+                            type: 'CBU'
+                        },
+                        {
+                            regex: /ACRED\.EN CTA\.CTE\.NRO:[\s\S]*?(\d+)\s*\n\s*(\d{2}\/\d{2}\/\d{4})/g,
+                            type: 'CTE'
+                        }
+                    ],
+                    "VENTAS C/DTO ANTIC POR FINANC ADQUIREN": /VENTAS C\/DTO ANTIC POR FINANC ADQUIREN\s*([\+]\s*\$\s*[\d\.\,]+)/g,
+                    "ARANCEL": /ARANCEL\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "IVA CRED.FISC.COMERCIO S/ARANC 21,00%": /IVA CRED\.FISC\.COMERCIO S\/ARANC 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "DTO S/VENTAS FIN ADQ CONT": /DTO S\/VENTAS FIN ADQ CONT\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "ARANCEL CUOTAS": /ARANCEL CUOTAS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "DTO S/VENTAS FIN ADQ CUOTA": /DTO S\/VENTAS FIN ADQ CUOTA\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "IVA ARANCEL CUOTAS 21,00%": /IVA ARANCEL CUOTAS 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "IVA S/DTO FIN ADQ CONT 21,00%": /IVA S\/DTO FIN ADQ CONT 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "IVA S/DTO FIN ADQ CUOTA 21,00%": /IVA S\/DTO FIN ADQ CUOTA 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "PERCEPCION IVA R.G. 2408 1,50 %": /PERCEPCION IVA R\.G\. 2408\s+1,50\s*%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "PERCEPCION IVA R.G. 2408 3,00 %": /PERCEPCION IVA R\.G\. 2408\s+3,00\s*%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "IMPORTE NETO DE PAGOS": /IMPORTE NETO DE PAGOS\s*(\s*\$\s*[\d\.\,]+)/g,
+                    "VENTAS C/DESCUENTO CONTADO": /VENTAS C\/DESCUENTO CONTADO\s*([\+]\s*\$\s*[\d\.\,]+)/g,
+                    "VENTAS C/DTO PLAN CUOTAS": /VENTAS C\/DTO PLAN CUOTAS\s*([\+]\s*\$\s*[\d\.\,]+)/g,
+                    "SERVICIO OPER. INTERNAC.": /SERVICIO OPER\. INTERNAC\.\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "IVA RI SERV.OPER. INT.": /IVA RI SERV\.OPER\. INT\.\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "QR AJUSTES": /QR AJUSTES\s*([\+]\s*\$\s*[\d\.\,]+)/g,
+                    "QR PERCEPCION IVA 3337": /QR PERCEPCION IVA 3337\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "CARGO SISTEMA CUOTAS MENS": /CARGO SISTEMA CUOTAS MENS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "IVA RI SIST CUOTAS": /IVA RI SIST CUOTAS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "VENTAS C/DTO CUOTAS FINANC. OTORG.": /VENTAS C\/DTO CUOTAS FINANC\. OTORG\.\s*([\+]\s*\$\s*[\d\.\,]+)/g,
+                    "PROMO CUOTA AHORA/SIMPLE": /PROMO CUOTA AHORA\/SIMPLE\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "IVA PROMO CUOTA AHORA/SIMPLE 10,50%": /IVA PROMO CUOTA AHORA\/SIMPLE 10,50%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "DESCUENTO FINANC.OTORG. CUOTAS": /DESCUENTO FINANC\.OTORG\. CUOTAS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "IVA CRED.FISC.COM.L.25063 S/DTO F.OTOR 10,50%": /IVA CRED\.FISC\.COM\.L\.25063 S\/DTO F\.OTOR 10,50%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                    "CARGO TERMINAL FISERV": /CARGO TERMINAL FISERV\s*([-−]\s*\$\s*[\d\.\,]+)/g,
+                }
+            },
+            cabal: {
+                concepts: {
+                    "TOTAL DE VENTAS": /TOTAL DE VENTAS\. CANTIDAD\.\.\.\s*\d+\s*([\d\.\,]+)/g,
+                    "ARANCEL DE DESCUENTO": /ARANCEL DE DESCUENTO\s*([\d\.\,]+[-−])/g,
+                    "IVA S/ARANCEL DE DESCUENTO 21,00%": /IVA S\/ARANCEL DE DESCUENTO\s*21,00%\s*([\d\.\,]+[-−])/g,
+                    "IVA S/ARANCEL DE DESCUENTO 10,50%": /IVA S\/ARANCEL DE DESCUENTO\s*10,50%\s*([\d\.\,]+[-−])/g,
+                    "COSTO FINANCIERO TOTAL": /COSTO FINANCIERO TOTAL\s*([\d\.\,]+[-−])/g,
+                    "IVA S/COSTO FINANCIERO": /IVA S\/COSTO FINANCIERO\s*([\d\.\,]+[-−])/g,
+                    "IVA S/COSTO FINANCIERO 10,50%": /IVA S\/COSTO FINANCIERO\s*10,50%\s*([\d\.\,]+[-−])/g,
+                    "PERCEPCION DE IVA RG 333 1,50%": /PERCEPCION DE IVA RG 333\s*1,50%\s*[\d\.\,]+\s*([\d\.\,]+[-−])/g,
+                    "PERCEPCION DE IVA RG 333 3,00%": /PERCEPCION DE IVA RG 333\s*3,00%\s*[\d\.\,]+\s*([\d\.\,]+[-−])/g,
+                    "TOTAL DEBITOS": /TOTAL DEBITOS[\s\S]*?([\d\.\,]+[-−])/g,
+                    "IVA": /IVA\s*[\d\.\,]*\s*%\s*[\d\.\,]*\s*([\d\.\,]+[-−])/g,
+                    "COMISION ADMINISTRACION P": /COMISION ADMINISTRACION P\s*[\w\d\.\/\:\- ]*\s*([\d\.\,]+[-−])/g,
+                    "NETO A LIQUIDAR POR VENTAS": /NETO A LIQUIDAR POR VENTAS\s*([\d\.\,]+)/g,
+                    "IVA S/ARANCEL + COSTO FINANCIERO": /IVA S\/ARANCEL \+ COSTO FINANCIERO\s*([\d\.\,]+−)/g
+                }
+            },
+            amex: {
+                concepts: {
+                    "IVA DEBITO FISCAL": /IVA\s+DEBITO\s+FISCAL\s+([\d\.\,]+-)/g,
+                    "PERCEPCION IVA R.G. DGI 3337": /PERCEP\s+IVA\s+R\.G\.\s+DGI\s+3337\s+([\d\.\,]+-)/g,
+                    "TOTAL PROCESADAS": /TOTAL[\s\S]*?PROCESADAS[\s\S]*?([\d\.\,]+)[\s\S]*?([\d\.\,]+-?)[\s\S]*?([\d\.\,]+-?)[\s\S]*?([\d\.\,]+)[\s\S]*?([\d\.\,]+-?)[\s\S]*?([\d\.\,]+)/g,
+                },
+            }
+        };
+
         document.getElementById('processButton').addEventListener('click', async function() {
             const fileInput = document.getElementById('liquidationFile');
             const bank = document.getElementById('bankSelect').value;
-            const resultsDiv = document.getElementById('results');
-            const resultsContentDiv = document.getElementById('resultsContent');
-            const loadingMessage = document.getElementById('loadingMessage');
-
             const files = fileInput.files;
+
+            const resultsDiv = document.getElementById('results');
+            const loadingMessage = document.getElementById('loadingMessage');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const exportExcelButton = document.getElementById('exportExcelButton');
+
             if (files.length === 0) {
                 displayMessage('Por favor, selecciona al menos un archivo PDF.', 'error');
                 return;
             }
 
-            // Ocultar resultados y mostrar mensaje de carga
             resultsDiv.classList.add('hidden');
             loadingMessage.classList.remove('hidden');
+            progressContainer.classList.remove('hidden');
+            exportExcelButton.classList.add('hidden');
+            exportExcelButton.disabled = true;
+            progressBar.style.width = '0%';
+            allFileSummaries = [];
 
             try {
-                const totalSummary = {};
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    const progress = ((i + 1) / files.length) * 100;
+                    progressBar.style.width = `${progress}%`;
+                    loadingMessage.innerHTML = `Procesando archivo ${i + 1} de ${files.length}, por favor espera...`;
 
-                for (const file of files) {
-                    // Leer el archivo como un ArrayBuffer
-                    const arrayBuffer = await readFileAsync(file);
-                    
-                    // Cargar y procesar el PDF
-                    const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
-                    let fullText = '';
-                    for (let i = 1; i <= pdf.numPages; i++) {
-                        const page = await pdf.getPage(i);
-                        const textContent = await page.getTextContent();
-                        const textItems = textContent.items.map(item => item.str);
-                        fullText += textItems.join('\n') + '\n';
-                    }
-
-                    // Procesar los datos extraídos del PDF y agregarlos al resumen total
-                    const fileSummary = processLiquidation(bank, fullText);
-                    if (fileSummary) {
-                        for (const key in fileSummary) {
-                            if (totalSummary[key]) {
-                                totalSummary[key] += fileSummary[key];
-                            } else {
-                                totalSummary[key] = fileSummary[key];
-                            }
+                    try {
+                        const arrayBuffer = await readFileAsync(file);
+                        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                        let fullText = '';
+                        for (let j = 1; j <= pdf.numPages; j++) {
+                            const page = await pdf.getPage(j);
+                            const textContent = await page.getTextContent();
+                            const textItems = textContent.items.map(item => item.str);
+                            fullText += textItems.join('\n') + '\n';
                         }
+                        
+                        const fileSummary = processLiquidation(bank, fullText);
+                        if (fileSummary) {
+                            fileSummary.NombreArchivo = file.name;
+                            allFileSummaries.push(fileSummary);
+                        }
+                    } catch (error) {
+                        console.error(`Error processing file ${file.name}:`, error);
+                        if (error.name === 'PasswordException') {
+                            displayMessage(`El archivo "${file.name}" está protegido con contraseña.`, 'error');
+                        } else {
+                            displayMessage(`Hubo un error al procesar el archivo "${file.name}". Por favor, asegúrate de que es un PDF válido.`, 'error');
+                        }
+                        return; // Stop processing on first error
                     }
                 }
                 
-                // Mostrar resultados y ocultar mensaje de carga
-                if (Object.keys(totalSummary).length > 0) {
-                    displayResults({ bank: 'Total Consolidado', summary: totalSummary });
+                if (allFileSummaries.length > 0) {
+                    displayResults(allFileSummaries);
                     resultsDiv.classList.remove('hidden');
+                    exportExcelButton.classList.remove('hidden');
+                    exportExcelButton.disabled = false;
                 } else {
                     displayMessage('No se encontraron datos de liquidación en los archivos seleccionados.', 'info');
                 }
-            } catch (error) {
-                console.error("Error al procesar el PDF:", error);
-                displayMessage('Hubo un error al procesar los archivos. Asegúrate de que son PDFs válidos.', 'error');
             } finally {
                 loadingMessage.classList.add('hidden');
+                progressContainer.classList.add('hidden');
             }
         });
         
         document.getElementById('inspectButton').addEventListener('click', async function() {
             const fileInput = document.getElementById('liquidationFile');
-            const resultsDiv = document.getElementById('results');
-            const resultsContentDiv = document.getElementById('resultsContent');
-            const loadingMessage = document.getElementById('loadingMessage');
-
             const file = fileInput.files[0];
+            const resultsDiv = document.getElementById('results');
+            const loadingMessage = document.getElementById('loadingMessage');
+            
             if (!file) {
                 displayMessage('Por favor, selecciona un archivo PDF para inspeccionar.', 'error');
                 return;
             }
             
-            // Ocultar resultados y mostrar mensaje de carga
             resultsDiv.classList.add('hidden');
             loadingMessage.classList.remove('hidden');
 
             try {
-                // Leer el archivo como un ArrayBuffer
                 const arrayBuffer = await readFileAsync(file);
-                
-                // Cargar y procesar el PDF
                 const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
                 let fullText = '';
                 for (let i = 1; i <= pdf.numPages; i++) {
@@ -169,18 +256,34 @@
                     fullText += textItems.join('\n') + '\n\n' + '--- FIN DE PÁGINA ' + i + ' ---\n\n';
                 }
 
-                // Mostrar el texto completo en el área de resultados
+                const resultsContentDiv = document.getElementById('resultsContent');
                 resultsContentDiv.innerHTML = `<h3 class="text-xl font-semibold mb-2">Texto extraído del PDF:</h3><pre class="whitespace-pre-wrap text-gray-700 text-sm p-4 bg-gray-100 rounded-lg">${fullText}</pre>`;
                 resultsDiv.classList.remove('hidden');
             } catch (error) {
                 console.error("Error al inspeccionar el PDF:", error);
-                displayMessage('Hubo un error al leer el archivo. Asegúrate de que es un PDF válido.', 'error');
+                if (error.name === 'PasswordException') {
+                    displayMessage('El archivo PDF está protegido con contraseña y no se puede procesar.', 'error');
+                } else {
+                    displayMessage('Hubo un error al leer el archivo. Asegúrate de que es un PDF válido.', 'error');
+                }
             } finally {
                 loadingMessage.classList.add('hidden');
             }
         });
 
-        // Función auxiliar para leer un archivo de forma asíncrona
+        document.getElementById('exportExcelButton').addEventListener('click', function() {
+            exportToExcel(allFileSummaries);
+        });
+
+        // ===========================================
+        //  Funciones Auxiliares
+        // ===========================================
+
+        /**
+         * Reads a file as an ArrayBuffer asynchronously.
+         * @param {File} file The file to read.
+         * @returns {Promise<ArrayBuffer>} A promise that resolves with the file's content.
+         */
         function readFileAsync(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -190,7 +293,11 @@
             });
         }
         
-        // Función auxiliar para mostrar mensajes al usuario
+        /**
+         * Displays a message to the user in a styled box.
+         * @param {string} message The message to display.
+         * @param {'error'|'info'} type The type of message to style (e.g., 'error' for red text).
+         */
         function displayMessage(message, type) {
             const resultsDiv = document.getElementById('results');
             const resultsContentDiv = document.getElementById('resultsContent');
@@ -199,248 +306,184 @@
             resultsContentDiv.innerHTML = `<p class="text-center font-semibold ${type === 'error' ? 'text-red-600' : 'text-gray-500'}">${message}</p>`;
         }
         
-        // Función auxiliar para convertir números con formato español (separador de miles '.' y decimal ',')
+        /**
+         * Converts a number string with Spanish format (e.g., "1.234,56") into a standard float.
+         * @param {string} numStr The number string to parse.
+         * @returns {number} The parsed number.
+         */
         function parseSpanishNumber(numStr) {
             if (!numStr) return 0;
-            // Verificar si el string contiene un signo negativo.
             const isNegative = numStr.includes('-') || numStr.includes('−');
-            // Limpiar el string de cualquier caracter no numérico y no el signo negativo.
             const cleanStr = numStr.replace(/[^\d,\-−]/g, '').replace(',', '.').replace(/[−-]/, '');
             const value = parseFloat(cleanStr);
             return isNegative ? -value : value;
         }
         
-        // Función para formatear números al estilo español (1.234,56).
-        // Se ha modificado para que muestre el signo negativo correctamente.
+        /**
+         * Formats a number to Spanish style (e.g., 1.234,56).
+         * @param {number} num The number to format.
+         * @returns {string} The formatted number string.
+         */
         function formatSpanishNumber(num) {
+            if (num === null || num === undefined) return "N/A";
             if (num < 0) {
                 return `−${Math.abs(num).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             }
             return num.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         }
 
-        // Una lista explícita de conceptos que son deducciones
-        const negativeConcepts = [
-            "ARANCEL",
-            "IVA",
-            "IVA CRED.FISC.COMERCIO S/ARANC 21,00%",
-            "DTO S/VENTAS FIN ADQ CONT",
-            "ARANCEL CUOTAS",
-            "DTO S/VENTAS FIN ADQ CUOTA",
-            "IVA ARANCEL CUOTAS 21,00%",
-            "IVA S/DTO FIN ADQ CONT 21,00%",
-            "IVA S/DTO FIN ADQ CUOTA 21,00%",
-            "PERCEPCION IVA R.G. 2408 1,50 %",
-            "PERCEPCION IVA R.G. 2408 3,00 %",
-            "SERVICIO OPER. INTERNAC.",
-            "IVA RI SERV.OPER. INT.",
-            "QR PERCEPCION IVA 3337",
-            "CARGO SISTEMA CUOTAS MENS",
-            "IVA RI SIST CUOTAS",
-            "PROMO CUOTA AHORA/SIMPLE",
-            "IVA PROMO CUOTA AHORA/SIMPLE 10,50%",
-            "DESCUENTO FINANC.OTORG. CUOTAS",
-            "IVA CRED.FISC.COM.L.25063 S/DTO F.OTOR 10,50%",
-            "CARGO TERMINAL FISERV",
-            "ARANCEL DE DESCUENTO",
-            "IVA S/ARANCEL DE DESCUENTO 21,00%",
-            "IVA S/ARANCEL DE DESCUENTO 10,50%",
-            "COSTO FINANCIERO TOTAL",
-            "IVA S/COSTO FINANCIERO",
-            "IVA S/COSTO FINANCIERO 10,50%",
-            "PERCEPCION DE IVA RG 333 1,50%",
-            "PERCEPCION DE IVA RG 333 3,00%",
-            "TOTAL DEBITOS",
-            "IVA DE DEBITOS",
-            "COMISION ADMINISTRACION P",
-            "DESCUENTO POR SERVICIOS",
-            "RETENCIONES IMPOSITIVAS",
-            "IVA DEBITO FISCAL",
-            "PERCEPCION IVA R.G. DGI 3337",
-            "Monto Descuento",
-            "Descuento por servicios",
-            "Retenciones impositivas"
-        ];
-
-        // Function that processes the PDF text and extracts all concepts and their amounts.
+        /**
+         * Processes the PDF text based on the selected bank and extracts all concepts and their amounts.
+         * @param {string} bank The bank selected by the user.
+         * @param {string} data The full text extracted from the PDF.
+         * @returns {Object} An object with the extracted concepts and their totals.
+         */
         function processLiquidation(bank, data) {
             const summary = {};
-            
-            switch (bank) {
-                case 'fiserv':
-                    // Mapping of concepts and their search patterns for precise extraction.
-                    // Nota: Se ajustaron las expresiones regulares para capturar el signo y el monto juntos para que parseSpanishNumber los procese correctamente.
-                    const fiservConcepts = {
-                        "VENTAS C/DTO ANTIC POR FINANC ADQUIREN": /VENTAS C\/DTO ANTIC POR FINANC ADQUIREN\s*([\+]\s*\$\s*[\d\.\,]+)/g,
-                        "ARANCEL": /ARANCEL\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "IVA CRED.FISC.COMERCIO S/ARANC 21,00%": /IVA CRED\.FISC\.COMERCIO S\/ARANC 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "DTO S/VENTAS FIN ADQ CONT": /DTO S\/VENTAS FIN ADQ CONT\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "ARANCEL CUOTAS": /ARANCEL CUOTAS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "DTO S/VENTAS FIN ADQ CUOTA": /DTO S\/VENTAS FIN ADQ CUOTA\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "IVA ARANCEL CUOTAS 21,00%": /IVA ARANCEL CUOTAS 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "IVA S/DTO FIN ADQ CONT 21,00%": /IVA S\/DTO FIN ADQ CONT 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "IVA S/DTO FIN ADQ CUOTA 21,00%": /IVA S\/DTO FIN ADQ CUOTA 21,00%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "PERCEPCION IVA R.G. 2408 1,50 %": /PERCEPCION IVA R\.G\. 2408\s+1,50\s*%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "PERCEPCION IVA R.G. 2408 3,00 %": /PERCEPCION IVA R\.G\. 2408\s+3,00\s*%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "IMPORTE NETO DE PAGOS": /IMPORTE NETO DE PAGOS\s*(\s*\$\s*[\d\.\,]+)/g,
-                        "VENTAS C/DESCUENTO CONTADO": /VENTAS C\/DESCUENTO CONTADO\s*([\+]\s*\$\s*[\d\.\,]+)/g,
-                        "VENTAS C/DTO PLAN CUOTAS": /VENTAS C\/DTO PLAN CUOTAS\s*([\+]\s*\$\s*[\d\.\,]+)/g,
-                        "SERVICIO OPER. INTERNAC.": /SERVICIO OPER\. INTERNAC\.\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "IVA RI SERV.OPER. INT.": /IVA RI SERV\.OPER\. INT\.\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "QR AJUSTES": /QR AJUSTES\s*([\+]\s*\$\s*[\d\.\,]+)/g,
-                        "QR PERCEPCION IVA 3337": /QR PERCEPCION IVA 3337\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "CARGO SISTEMA CUOTAS MENS": /CARGO SISTEMA CUOTAS MENS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "IVA RI SIST CUOTAS": /IVA RI SIST CUOTAS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "VENTAS C/DTO CUOTAS FINANC. OTORG.": /VENTAS C\/DTO CUOTAS FINANC\. OTORG\.\s*([\+]\s*\$\s*[\d\.\,]+)/g,
-                        "PROMO CUOTA AHORA/SIMPLE": /PROMO CUOTA AHORA\/SIMPLE\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "IVA PROMO CUOTA AHORA\/SIMPLE 10,50%": /IVA PROMO CUOTA AHORA\/SIMPLE 10,50%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "DESCUENTO FINANC.OTORG. CUOTAS": /DESCUENTO FINANC\.OTORG\. CUOTAS\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "IVA CRED.FISC.COM.L.25063 S/DTO F.OTOR 10,50%": /IVA CRED\.FISC\.COM\.L\.25063 S\/DTO F\.OTOR 10,50%\s*([-−]\s*\$\s*[\d\.\,]+)/g,
-                        "CARGO TERMINAL FISERV": /CARGO TERMINAL FISERV\s*([-−]\s*\$\s*[\d\.\,]+)/g
-                    };
-                    
-                    for (const concept in fiservConcepts) {
-                        const regex = fiservConcepts[concept];
-                        const matches = [...data.matchAll(regex)];
-                        let total = 0;
-                        for (const match of matches) {
-                            // Ahora el grupo capturado (match[1]) incluye el signo y el símbolo de moneda,
-                            // por lo que parseSpanishNumber puede determinar correctamente si es un valor positivo o negativo.
-                            total += parseSpanishNumber(match[1]);
-                        }
-                        if (total !== 0) {
-                           summary[concept] = total;
-                        }
-                    }
-                    return summary;
+            const bankRegexes = bankConfig[bank]?.concepts;
 
-                case 'cabal':
-                    // Regexes for Cabal concepts, updated to be more robust
-                    const cabalConcepts = {
-                        "TOTAL DE VENTAS": /TOTAL DE VENTAS\. CANTIDAD\.\.\.\s*\d+\s*([\d\.\,]+)/g,
-                        "ARANCEL DE DESCUENTO": /ARANCEL DE DESCUENTO\s*([\d\.\,]+[-−])/g,
-                        "IVA S/ARANCEL DE DESCUENTO 21,00%": /IVA S\/ARANCEL DE DESCUENTO\s*21,00%\s*([\d\.\,]+[-−])/g,
-                        "IVA S/ARANCEL DE DESCUENTO 10,50%": /IVA S\/ARANCEL DE DESCUENTO\s*10,50%\s*([\d\.\,]+[-−])/g,
-                        "COSTO FINANCIERO TOTAL": /COSTO FINANCIERO TOTAL\s*([\d\.\,]+[-−])/g,
-                        "IVA S/COSTO FINANCIERO": /IVA S\/COSTO FINANCIERO\s*([\d\.\,]+[-−])/g,
-                        "IVA S/COSTO FINANCIERO 10,50%": /IVA S\/COSTO FINANCIERO\s*10,50%\s*([\d\.\,]+[-−])/g,
-                        "PERCEPCION DE IVA RG 333 1,50%": /PERCEPCION DE IVA RG 333\s*1,50%\s*[\d\.\,]+\s*([\d\.\,]+[-−])/g,
-                        "PERCEPCION DE IVA RG 333 3,00%": /PERCEPCION DE IVA RG 333\s*3,00%\s*[\d\.\,]+\s*([\d\.\,]+[-−])/g,
-                        // Nuevo regex más flexible para TOTAL DEBITOS
-                        "TOTAL DEBITOS": /TOTAL DEBITOS[\s\S]*?([\d\.\,]+[-−])/g,
-                        // Nuevo regex más flexible para IVA basado en la posición en el documento
-                        "IVA": /IVA\s*[\d\.\,]*\s*%\s*[\d\.\,]*\s*([\d\.\,]+[-−])/g,
-                        "COMISION ADMINISTRACION P": /COMISION ADMINISTRACION P\s*[\w\d\.\/\:\- ]*\s*([\d\.\,]+[-−])/g,
-                        "NETO A LIQUIDAR POR VENTAS": /NETO A LIQUIDAR POR VENTAS\s*([\d\.\,]+)/g
-                    };
-                    
-                    for (const concept in cabalConcepts) {
-                        const regex = cabalConcepts[concept];
-                        const matches = [...data.matchAll(regex)];
-                        let total = 0;
-                        for (const match of matches) {
-                            // Usar el primer grupo capturado, que es el valor numérico
-                            total += parseSpanishNumber(match[1]);
-                        }
-                        if (total !== 0) {
-                           summary[concept] = total;
-                        }
-                    }
-                    return summary;
-
-                case 'amex':
-                    const amexSummary = {};
-                    const amexConcepts = {
-                        // Regex mejorado para buscar el valor seguido de un guión
-                        "IVA DEBITO FISCAL": /IVA\s+DEBITO\s+FISCAL\s+([\d\.\,]+-)/g,
-                        "PERCEPCION IVA R.G. DGI 3337": /PERCEP\s+IVA\s+R\.G\.\s+DGI\s+3337\s+([\d\.\,]+-)/g,
-                    };
-
-                    // Procesa el bloque de totales que no tienen una etiqueta explícita
-                    // Búsqueda de la etiqueta "TOTAL PROCESADAS" con mayor flexibilidad
-                    const transaccionesRegex = /TOTAL[\s\S]*?PROCESADAS[\s\S]*?([\d\.\,]+)[\s\S]*?([\d\.\,]+-?)[\s\S]*?([\d\.\,]+-?)[\s\S]*?([\d\.\,]+)[\s\S]*?([\d\.\,]+-?)[\s\S]*?([\d\.\,]+)/;
-                    const transaccionesMatches = data.match(transaccionesRegex);
-                    
-                    if (transaccionesMatches) {
-                        amexSummary["Monto Bruto"] = parseSpanishNumber(transaccionesMatches[1]);
-                        amexSummary["Monto Descuento"] = parseSpanishNumber(transaccionesMatches[2]);
-                        amexSummary["Descuento por servicios"] = parseSpanishNumber(transaccionesMatches[3]);
-                        amexSummary["Monto de credito"] = parseSpanishNumber(transaccionesMatches[4]);
-                        amexSummary["Retenciones impositivas"] = parseSpanishNumber(transaccionesMatches[5]);
-                        amexSummary["Monto Neto"] = parseSpanishNumber(transaccionesMatches[6]);
-                    }
-
-                    // Procesa los otros conceptos que tienen etiquetas claras
-                    for (const concept in amexConcepts) {
-                        const regex = amexConcepts[concept];
-                        const matches = [...data.matchAll(regex)];
-                        let total = 0;
-                        for (const match of matches) {
-                            total += parseSpanishNumber(match[1]);
-                        }
-                        if (total !== 0) {
-                           amexSummary[concept] = total;
-                        }
-                    }
-
-                    return amexSummary;
-
-                case 'bankA':
-                    const linesA = data.trim().split('\n');
-                    summary.totalVenta = 0; summary.totalImpuesto = 0; summary.totalComision = 0; summary.totalPago = 0;
-                    linesA.forEach(line => {
-                        const [type, value] = line.split(',').map(s => s.trim());
-                        const numericValue = parseFloat(value);
-                        if (!isNaN(numericValue)) {
-                            switch (type.toUpperCase()) {
-                                case 'VENTA': summary.totalVenta += numericValue; break;
-                                case 'IMPUESTO': summary.totalImpuesto += numericValue; break;
-                                case 'COMISION': summary.totalComision += numericValue; break;
-                                case 'PAGO': summary.totalPago += numericValue; break;
-                            }
-                        }
-                    });
-                    return summary;
-
-                case 'bankB':
-                    const linesB = data.trim().split('\n');
-                    summary.totalVenta = 0; summary.totalImpuesto = 0; summary.totalComision = 0; summary.totalPago = 0;
-                    linesB.forEach(line => {
-                        const [venta, impuesto, comision, pago] = line.split(',').map(s => parseFloat(s.trim()));
-                        if (!isNaN(venta)) {
-                            summary.totalVenta += venta;
-                            summary.totalImpuesto += impuesto;
-                            summary.totalComision += comision;
-                            summary.totalPago += pago;
-                        }
-                    });
-                    return summary;
-
-                default:
-                    return null;
+            if (!bankRegexes) {
+                displayMessage(`No hay reglas de procesamiento definidas para el banco seleccionado: ${bank}`, 'error');
+                return null;
             }
-        }
 
-        function displayResults(data) {
+            for (const concept in bankRegexes) {
+                const regex = bankRegexes[concept];
+                
+                if (Array.isArray(regex)) {
+                    // Handle concepts with multiple possible regexes
+                    let matchFound = false;
+                    for (const item of regex) {
+                        const matches = [...data.matchAll(item.regex)];
+                        if (matches.length > 0) {
+                            const lastMatch = matches[matches.length - 1];
+                            summary["Número de Liquidación"] = lastMatch && lastMatch[1] ? lastMatch[1].trim() : "No se pudo extraer";
+                            summary["Fecha de Liquidación"] = lastMatch && lastMatch[2] ? lastMatch[2].trim() : "No se pudo extraer";
+                            matchFound = true;
+                            break;
+                        }
+                    }
+                    if (!matchFound) {
+                        summary["Número de Liquidación"] = "No se pudo extraer";
+                        summary["Fecha de Liquidación"] = "No se pudo extraer";
+                    }
+                    continue;
+                }
+
+                // Handle single regex concepts
+                if (["CUIT Entidad Pagadora"].includes(concept)) {
+                    const matches = [...data.matchAll(regex)];
+                    const lastMatch = matches.length > 0 ? matches[matches.length - 1] : null;
+                    if (concept === 'CUIT Entidad Pagadora') {
+                        summary[concept] = lastMatch && lastMatch[1] ? lastMatch[1].trim() : "No se pudo extraer el CUIT";
+                    }
+                    continue;
+                }
+
+                const matches = [...data.matchAll(regex)];
+                let total = 0;
+                let value = null;
+
+                if (bank === 'amex' && concept === 'TOTAL PROCESADAS' && matches.length > 0) {
+                    const match = matches[0];
+                    summary["Monto Bruto"] = parseSpanishNumber(match[1]);
+                    summary["Monto Descuento"] = parseSpanishNumber(match[2]);
+                    summary["Descuento por servicios"] = parseSpanishNumber(match[3]);
+                    summary["Monto de credito"] = parseSpanishNumber(match[4]);
+                    summary["Retenciones impositivas"] = parseSpanishNumber(match[5]);
+                    summary["Monto Neto"] = parseSpanishNumber(match[6]);
+                } else {
+                    for (const match of matches) {
+                        const capturedValue = (match[1] || match[2] || match[3]).trim();
+                        if (!isNaN(parseSpanishNumber(capturedValue))) {
+                            total += parseSpanishNumber(capturedValue);
+                        } else {
+                            value = capturedValue;
+                        }
+                    }
+                    if (total !== 0) {
+                        summary[concept] = total;
+                    } else if (value !== null) {
+                        summary[concept] = value;
+                    }
+                }
+            }
+            return summary;
+        }
+        
+        /**
+         * Displays the processing results on the page.
+         * @param {Array<Object>} allSummaries The array of summary objects for each file.
+         */
+        function displayResults(allSummaries) {
             const resultsContentDiv = document.getElementById('resultsContent');
             resultsContentDiv.innerHTML = '';
             
-            const summaryHTML = `
-                <div class="mb-4">
-                    <h3 class="text-2xl font-semibold mb-4 text-center">Resumen ${data.bank}</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                        ${Object.entries(data.summary).map(([key, value]) => `
-                            <div class="bg-gray-50 p-3 rounded-lg flex justify-between items-center">
-                                <span class="font-medium text-gray-700">${key}:</span>
-                                <span class="font-bold ${value >= 0 ? 'text-blue-600' : 'text-red-600'}">
-                                    ${formatSpanishNumber(value)}
-                                </span>
-                            </div>
-                        `).join('')}
+            allSummaries.forEach(summary => {
+                const individualSummaryHTML = `
+                    <div class="mb-6">
+                        <h3 class="text-2xl font-semibold mb-4 text-center">Resumen de ${summary.NombreArchivo}</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                            ${Object.entries(summary).map(([key, value]) => `
+                                <div class="bg-gray-50 p-3 rounded-lg flex justify-between items-center">
+                                    <span class="font-medium text-gray-700">${key}:</span>
+                                    <span class="font-bold ${typeof value === 'number' && value >= 0 ? 'text-blue-600' : typeof value === 'number' ? 'text-red-600' : 'text-gray-900'}">
+                                        ${typeof value === 'number' ? formatSpanishNumber(value) : value}
+                                    </span>
+                                </div>
+                            `).join('')}
+                        </div>
                     </div>
-                </div>
-            `;
-            resultsContentDiv.innerHTML = summaryHTML;
+                `;
+                resultsContentDiv.innerHTML += individualSummaryHTML;
+            });
+
+            const consolidatedSummary = {};
+            allSummaries.forEach(summary => {
+                for (const key in summary) {
+                    if (key !== "NombreArchivo" && typeof summary[key] === 'number') {
+                        if (!consolidatedSummary[key]) {
+                            consolidatedSummary[key] = 0;
+                        }
+                        consolidatedSummary[key] += summary[key];
+                    }
+                }
+            });
+
+            if (Object.keys(consolidatedSummary).length > 0) {
+                const consolidatedSummaryHTML = `
+                    <div class="mb-4 pt-6 border-t border-gray-300">
+                        <h3 class="text-2xl font-bold mb-4 text-center text-blue-800">TOTAL CONSOLIDADO</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                            ${Object.entries(consolidatedSummary).map(([key, value]) => `
+                                <div class="bg-blue-50 p-3 rounded-lg flex justify-between items-center border border-blue-200">
+                                    <span class="font-semibold text-blue-800">${key}:</span>
+                                    <span class="font-extrabold text-lg ${value >= 0 ? 'text-blue-600' : 'text-red-600'}">
+                                        $ ${formatSpanishNumber(value)}
+                                    </span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+                resultsContentDiv.innerHTML += consolidatedSummaryHTML;
+            }
+        }
+
+        /**
+         * Exports the processed data to an Excel file.
+         * @param {Array<Object>} data The array of summary objects for each file.
+         */
+        function exportToExcel(data) {
+            if (data.length === 0) {
+                alert('No hay datos para exportar.');
+                return;
+            }
+
+            const ws = XLSX.utils.json_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Liquidaciones");
+            XLSX.writeFile(wb, "liquidaciones_consolidadas.xlsx");
         }
     </script>
 </body>
