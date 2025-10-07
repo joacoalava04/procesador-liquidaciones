@@ -5,10 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Procesador de Liquidaciones</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Asegúrate de que las rutas a pdf.js y xlsx son correctas y estables -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght400;700&display=swap');
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f0f4f8;
@@ -315,6 +316,7 @@
         function parseSpanishNumber(numStr) {
             if (!numStr) return 0;
             const isNegative = numStr.includes('-') || numStr.includes('−');
+            // Reemplaza el punto por nada (separador de miles) y la coma por punto (separador decimal)
             const cleanStr = numStr.replace(/[^\d,\-−]/g, '').replace(',', '.').replace(/[−-]/, '');
             const value = parseFloat(cleanStr);
             return isNegative ? -value : value;
@@ -335,6 +337,7 @@
 
         /**
          * Processes the PDF text based on the selected bank and extracts all concepts and their amounts.
+         * ¡Actualizado con la lógica de "Barrido" para Fiserv!
          * @param {string} bank The bank selected by the user.
          * @param {string} data The full text extracted from the PDF.
          * @returns {Object} An object with the extracted concepts and their totals.
@@ -348,11 +351,15 @@
                 return null;
             }
 
+            // Array para rastrear el índice de inicio y la longitud del texto capturado por regex específicas.
+            let capturedTextSegments = []; 
+
+            // 1. Extraer conceptos específicos y especiales
             for (const concept in bankRegexes) {
                 const regex = bankRegexes[concept];
-                
+
                 if (Array.isArray(regex)) {
-                    // Handle concepts with multiple possible regexes
+                    // Lógica para 'Numero y Fecha Liquidacion' (Fiserv)
                     let matchFound = false;
                     for (const item of regex) {
                         const matches = [...data.matchAll(item.regex)];
@@ -361,6 +368,10 @@
                             summary["Número de Liquidación"] = lastMatch && lastMatch[1] ? lastMatch[1].trim() : "No se pudo extraer";
                             summary["Fecha de Liquidación"] = lastMatch && lastMatch[2] ? lastMatch[2].trim() : "No se pudo extraer";
                             matchFound = true;
+                            // Registrar el área capturada
+                            for(const match of matches) {
+                                capturedTextSegments.push({ index: match.index, length: match[0].length });
+                            }
                             break;
                         }
                     }
@@ -371,44 +382,110 @@
                     continue;
                 }
 
-                // Handle single regex concepts
-                if (["CUIT Entidad Pagadora"].includes(concept)) {
+                // Lógica para CUIT y Entidad Pagadora (solo captura el valor sin sumar)
+                if (["CUIT Entidad Pagadora", "Entidad Pagadora"].includes(concept)) {
                     const matches = [...data.matchAll(regex)];
                     const lastMatch = matches.length > 0 ? matches[matches.length - 1] : null;
                     if (concept === 'CUIT Entidad Pagadora') {
                         summary[concept] = lastMatch && lastMatch[1] ? lastMatch[1].trim() : "No se pudo extraer el CUIT";
+                    } else if (concept === 'Entidad Pagadora') {
+                        const value = (lastMatch && lastMatch[1]) ? lastMatch[1].trim() : (lastMatch && lastMatch[2]) ? lastMatch[2].trim() : "No se pudo extraer";
+                        summary[concept] = value;
+                    }
+                    // Registrar el área capturada
+                    for(const match of matches) {
+                        capturedTextSegments.push({ index: match.index, length: match[0].length });
+                    }
+                    continue;
+                }
+                
+                // Lógica para el formato especial de Amex
+                if (bank === 'amex' && concept === 'TOTAL PROCESADAS') {
+                    const matches = [...data.matchAll(regex)];
+                    if (matches.length > 0) {
+                         const match = matches[0];
+                         summary["Monto Bruto"] = parseSpanishNumber(match[1]);
+                         summary["Monto Descuento"] = parseSpanishNumber(match[2]);
+                         summary["Descuento por servicios"] = parseSpanishNumber(match[3]);
+                         summary["Monto de credito"] = parseSpanishNumber(match[4]);
+                         summary["Retenciones impositivas"] = parseSpanishNumber(match[5]);
+                         summary["Monto Neto"] = parseSpanishNumber(match[6]);
                     }
                     continue;
                 }
 
+                // Lógica para conceptos numéricos (Cabal y el resto de Fiserv)
                 const matches = [...data.matchAll(regex)];
                 let total = 0;
                 let value = null;
 
-                if (bank === 'amex' && concept === 'TOTAL PROCESADAS' && matches.length > 0) {
-                    const match = matches[0];
-                    summary["Monto Bruto"] = parseSpanishNumber(match[1]);
-                    summary["Monto Descuento"] = parseSpanishNumber(match[2]);
-                    summary["Descuento por servicios"] = parseSpanishNumber(match[3]);
-                    summary["Monto de credito"] = parseSpanishNumber(match[4]);
-                    summary["Retenciones impositivas"] = parseSpanishNumber(match[5]);
-                    summary["Monto Neto"] = parseSpanishNumber(match[6]);
-                } else {
-                    for (const match of matches) {
-                        const capturedValue = (match[1] || match[2] || match[3]).trim();
-                        if (!isNaN(parseSpanishNumber(capturedValue))) {
-                            total += parseSpanishNumber(capturedValue);
-                        } else {
-                            value = capturedValue;
-                        }
+                for (const match of matches) {
+                    // El valor capturado puede estar en diferentes grupos de la regex (match[1], match[2], etc.)
+                    const capturedValue = (match[1] || match[2] || match[3] || match[4] || match[5] || match[6]).trim();
+                    const parsed = parseSpanishNumber(capturedValue);
+                    
+                    if (!isNaN(parsed) && capturedValue.includes(',')) { // Requiere una coma para ser un monto que vale la pena sumar
+                        total += parsed;
+                    } else {
+                        value = capturedValue;
                     }
-                    if (total !== 0) {
-                        summary[concept] = total;
-                    } else if (value !== null) {
-                        summary[concept] = value;
-                    }
+                    
+                    // Registrar el segmento de texto capturado por las regex específicas
+                    capturedTextSegments.push({ index: match.index, length: match[0].length });
+                }
+                
+                if (total !== 0) {
+                    summary[concept] = total;
+                } else if (value !== null && value.trim() !== '') {
+                    summary[concept] = value;
                 }
             }
+
+
+            // ===============================================
+            // 2. Lógica de "Barrido" para Conceptos No Listados (Solo para Fiserv)
+            // ===============================================
+            if (bank === 'fiserv') {
+                // Regex genérica (Barrido Mejorado): Captura conceptos que no fueron listados.
+                // Importante: Restringimos el concepto a no contener saltos de línea y a ser de longitud limitada (máx 100)
+                // para evitar capturar bloques de transacciones detalladas.
+                // Patrón: (Concepto, sin \n, máx 100 caracteres) (Espacios) (Signo $ +/-) (Monto formato español)
+                const sweepRegex = /([A-Z0-9\.\,\%\/\: -]{1,100}?)\s*([\+−-]?\s*\$\s*[\d\.\,]+)/g;
+                const potentialMatches = [...data.matchAll(sweepRegex)];
+
+                for (const match of potentialMatches) {
+                    const conceptName = match[1].trim();
+                    const conceptAmountStr = match[2].trim();
+                    const amount = parseSpanishNumber(conceptAmountStr);
+                    
+                    // Verifica si esta posición del texto ya fue capturada por una de las regex específicas
+                    const isAlreadyCaptured = capturedTextSegments.some(segment => 
+                        // Verificamos que el inicio del match esté dentro de un segmento capturado
+                        match.index >= segment.index && match.index < segment.index + segment.length
+                    );
+
+                    // Solo agrega si el monto es válido (no cero, no NaN) y NO ha sido capturado previamente
+                    if (!isNaN(amount) && amount !== 0 && !isAlreadyCaptured) {
+                        // Normalizar el nombre para evitar duplicados por espacios extra o mayúsculas inconsistentes
+                        const normalizedConceptName = conceptName.replace(/\s{2,}/g, ' ').trim(); 
+                        
+                        // Si ya existe la clave (por ejemplo, dos líneas de texto distintas con el mismo concepto)
+                        if (typeof summary[normalizedConceptName] === 'number') {
+                            summary[normalizedConceptName] += amount;
+                        } else if (!summary[normalizedConceptName]) {
+                            summary[normalizedConceptName] = amount;
+                        }
+                        
+                        // Opcional: Registrar el segmento capturado por el barrido para evitar superposiciones con otros barridos
+                        capturedTextSegments.push({ index: match.index, length: match[0].length });
+                    }
+                }
+                
+                // Limpieza Post-Barrido: Se REMUEVE la eliminación de IMPORTE NETO DE PAGOS para que sea visible.
+                // delete summary['IMPORTE NETO DE PAGOS']; 
+            }
+            
+            // 3. Devolver el resumen
             return summary;
         }
         
@@ -481,7 +558,17 @@
                 return;
             }
 
-            const ws = XLSX.utils.json_to_sheet(data);
+            // Para Excel, es mejor usar los números sin formato de moneda para que se puedan sumar
+            const cleanData = data.map(summary => {
+                const cleanSummary = {};
+                for (const key in summary) {
+                    cleanSummary[key] = (typeof summary[key] === 'number') ? summary[key] : summary[key];
+                }
+                return cleanSummary;
+            });
+
+
+            const ws = XLSX.utils.json_to_sheet(cleanData);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, "Liquidaciones");
             XLSX.writeFile(wb, "liquidaciones_consolidadas.xlsx");
@@ -489,5 +576,3 @@
     </script>
 </body>
 </html>
-
-
